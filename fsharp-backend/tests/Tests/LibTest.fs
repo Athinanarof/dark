@@ -5,11 +5,14 @@ module Tests.LibTest
 
 open System.Threading.Tasks
 open FSharp.Control.Tasks
-open LibExecution.RuntimeTypes
 open FSharpPlus
+
+open LibExecution.RuntimeTypes
 open Prelude
 
 let fn = FQFnName.stdlibName
+
+let incorrectArgs = LibExecution.Errors.incorrectArgs
 
 let varA = TVariable "a"
 let varB = TVariable "b"
@@ -25,7 +28,7 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | state, [] -> Value(DFakeVal(DErrorRail(DOption None)))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -36,11 +39,58 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | state, [ DStr errorString ] ->
-            Value(DFakeVal(DError(JustAString(SourceNone, errorString))))
-        | args -> incorrectArgs ())
+            Value(DFakeVal(DError(SourceNone, errorString)))
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
+    { name = fn "Test" "sqlError" 0
+      parameters = [ Param.make "errorString" TStr "" ]
+      returnType = TInt
+      description = "Return a value that matches errors thrown by the SqlCompiler"
+      fn =
+        (function
+        | state, [ DStr errorString ] ->
+            let msg = LibExecution.Errors.queryCompilerErrorTemplate ++ errorString
+            Value(DFakeVal(DError(SourceNone, msg)))
+        | _ -> incorrectArgs ())
+      sqlSpec = NotYetImplementedTODO
+      previewable = Pure
+      deprecated = NotDeprecated }
+    { name = fn "Test" "nan" 0
+      parameters = []
+      returnType = TFloat
+      description = "Return a NaN"
+      fn =
+        (function
+        | _, [] -> Value(DFloat(System.Double.NaN))
+        | _ -> incorrectArgs ())
+      sqlSpec = NotYetImplementedTODO
+      previewable = Pure
+      deprecated = NotDeprecated }
+    { name = fn "Test" "infinity" 0
+      parameters = []
+      returnType = TFloat
+      description = "Returns positive infitity"
+      fn =
+        (function
+        | _, [] -> Value(DFloat(System.Double.PositiveInfinity))
+        | _ -> incorrectArgs ())
+      sqlSpec = NotYetImplementedTODO
+      previewable = Pure
+      deprecated = NotDeprecated }
+    { name = fn "Test" "negativeInfinity" 0
+      parameters = []
+      returnType = TFloat
+      description = "Returns negative infitity"
+      fn =
+        (function
+        | _, [] -> Value(DFloat(System.Double.NegativeInfinity))
+        | _ -> incorrectArgs ())
+      sqlSpec = NotYetImplementedTODO
+      previewable = Pure
+      deprecated = NotDeprecated }
+
     { name = fn "Test" "incrementSideEffectCounter" 0
       parameters =
         [ Param.make "passThru" (TVariable "a") "Value which will be returned" ]
@@ -52,7 +102,7 @@ let fns : List<BuiltInFn> =
         | state, [ arg ] ->
             sideEffectCount := !sideEffectCount + 1
             Value(arg)
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -63,7 +113,7 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | state, [] -> Value(Dval.int !sideEffectCount)
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated } ]

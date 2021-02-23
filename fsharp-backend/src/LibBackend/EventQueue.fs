@@ -12,8 +12,10 @@ open Npgsql
 open Db
 
 open Prelude
-open Prelude.TableCloth
+open Prelude.Tablecloth
 open Tablecloth
+
+module RT = LibExecution.RuntimeTypes
 
 type transaction = id
 
@@ -42,8 +44,7 @@ type transaction = id
 //
 // let show_queue_action qa =
 //   match qa with Enqueue -> "enqueue" | Dequeue -> "dequeue" | None -> "none"
-//
-//
+
 module SchedulingRule =
   module RuleType =
     type T =
@@ -69,38 +70,61 @@ module SchedulingRule =
       eventSpace : string
       createdAt : System.DateTime }
 
-  type Dval = LibExecution.RuntimeTypes.Dval
-
-  let toDval (r : T) : Dval =
-    Dval.obj [ ("id", Dval.int r.id)
-               ("rule_type", r.ruleType |> RuleType.toString |> Dval.DStr)
-               ("canvas_id", Dval.DUuid r.canvasID)
-               ("handler_name", Dval.DStr r.handlerName)
-               ("event_space", Dval.DStr r.eventSpace)
-               ("created_at", Dval.DDate r.createdAt) ]
+  let toDval (r : T) : RT.Dval =
+    RT.Dval.obj [ ("id", RT.Dval.int r.id)
+                  ("rule_type", r.ruleType |> RuleType.toString |> RT.Dval.DStr)
+                  ("canvas_id", RT.Dval.DUuid r.canvasID)
+                  ("handler_name", RT.Dval.DStr r.handlerName)
+                  ("event_space", RT.Dval.DStr r.eventSpace)
+                  ("created_at", RT.Dval.DDate r.createdAt) ]
 
 module WorkerStates =
+
   type State =
     | Running
     | Blocked
     | Paused
 
-  let toString s =
+  let toString (s : State) : string =
     match s with
     | Running -> "run"
     | Blocked -> "block"
     | Paused -> "pause"
 
+  let parse (str : string) : State =
+    match str with
+    | "run" -> Running
+    | "block" -> Blocked
+    | "pause" -> Paused
+    | _ -> failwith "invalid WorkerState: {str}"
+
   type T = Map<string, State>
 
   let empty = Map.empty
 
-  // FSTODO
-  // let to_yojson (m : t) =
-  //   `Assoc
-  //     ( Map.to_alist m
-  //     |> List.map ~f:(fun (k, v) -> (k, `String (state_to_string v))) )
-  //
+  module JsonConverter =
+    open System.Text.Json
+    open System.Text.Json.Serialization
+
+    type WorkerStateConverter() =
+      inherit JsonConverter<State>()
+
+      override this.Read
+        (
+          reader : byref<Utf8JsonReader>,
+          _typ : System.Type,
+          options : JsonSerializerOptions
+        ) =
+        reader.GetString() |> parse
+
+      override this.Write
+        (
+          writer : Utf8JsonWriter,
+          value : State,
+          options : JsonSerializerOptions
+        ) =
+        printfn "serializing state"
+        writer.WriteStringValue(toString value)
 
   let find (k : string) (m : T) = Map.get k m
 

@@ -5,6 +5,18 @@ open System.Security.Cryptography
 open System
 open System.Text
 
+open System.Threading.Tasks
+open FSharp.Control.Tasks
+
+open FSharpPlus
+open System.Text.RegularExpressions
+
+open Prelude
+open LibExecution.RuntimeTypes
+
+module DvalRepr = LibExecution.DvalRepr
+module Errors = LibExecution.Errors
+
 (* type coerces one list to another using a function *)
 
 // let list_coerce (f: Dval -> Option<'a>) (l: List<Dval>): Result<List<'a>, List<Dval> * Dval> =
@@ -16,15 +28,12 @@ open System.Text
 //   |> Result.all
 
 // let error_result msg =
-//   DResult(ResError(Dval.dstr_of_string_exn msg))
-open System.Threading.Tasks
-open FSharp.Control.Tasks
-open LibExecution.RuntimeTypes
-open FSharpPlus
-open Prelude
-open System.Text.RegularExpressions
-
+//   DResult(ResError(DStr msg))
 let fn = FQFnName.stdlibName
+
+let err (str : string) = Value(Dval.errStr str)
+
+let incorrectArgs = LibExecution.Errors.incorrectArgs
 
 let varA = TVariable "a"
 let varB = TVariable "b"
@@ -51,7 +60,7 @@ let fns : List<BuiltInFn> =
       returnType = TStr
       description =
         "Iterate over each character (byte, not EGC) in the string, performing the operation in the block on each one"
-      fn = removedFunction
+      fn = Errors.removedFunction
       sqlSpec = NotQueryable
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "foreach" 1) }
@@ -70,27 +79,27 @@ let fns : List<BuiltInFn> =
                   (fun te ->
                     (LibExecution.Interpreter.applyFnVal
                       state
+                      (id 0)
                       b
                       [ DChar te ]
                       NotInPipe
                       NoRail))
              |> (fun dvals ->
                (taskv {
-                 let! dvals = dvals
+                 let! (dvals : List<Dval>) = dvals
 
-                 let chars =
-                   List.map
-                     (function
-                     | DChar c -> c
-                     | dv ->
-                         raise (
-                           RuntimeException(LambdaResultHasWrongType(dv, TChar))
-                         ))
-                     dvals
+                 match List.tryFind (fun dv -> Dval.isIncomplete dv) dvals with
+                 | Some i -> return i
+                 | None ->
+                     let chars =
+                       List.map
+                         (function
+                         | DChar c -> c
+                         | dv -> Errors.throw (Errors.expectedLambdaType TChar dv))
+                         dvals
 
-                 let str = String.concat "" chars
-
-                 return DStr str
+                     let str = String.concat "" chars
+                     return DStr str
                 })))
 
         | _ -> incorrectArgs ())
@@ -112,7 +121,7 @@ let fns : List<BuiltInFn> =
       parameters = [ Param.make "s" TStr "" ]
       returnType = TList TChar
       description = "Returns the list of characters (byte, not EGC) in the string"
-      fn = removedFunction
+      fn = Errors.removedFunction
       sqlSpec = NotQueryable
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "toList" 1) }
@@ -129,7 +138,7 @@ let fns : List<BuiltInFn> =
              |> Seq.toList
              |> DList
              |> Value)
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotQueryable
       previewable = Pure
       deprecated = NotDeprecated }
@@ -148,7 +157,7 @@ let fns : List<BuiltInFn> =
         | _, [ DStr s; DStr search; DStr replace ] ->
             Value(DStr(s.Replace(search, replace)))
         | _ -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+      sqlSpec = SqlFunction "replace"
       previewable = Pure
       deprecated = NotDeprecated }
     { name = fn "String" "toInt" 0
@@ -160,8 +169,8 @@ let fns : List<BuiltInFn> =
         | _, [ DStr s ] ->
             (try
               s |> System.Numerics.BigInteger.Parse |> DInt |> Value
-             with e -> Value(errStr ("Expected a string with only numbers")))
-        | args -> incorrectArgs ())
+             with e -> err (Errors.argumentWasnt "numeric" "s" (DStr s)))
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "toInt" 1) }
@@ -181,7 +190,7 @@ let fns : List<BuiltInFn> =
               |> Error
               |> DResult
               |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -191,12 +200,11 @@ let fns : List<BuiltInFn> =
       description = "Returns the float value of the string"
       fn =
         (function
-        | _, [ DStr s ] ->
+        | _, [ DStr s as dv ] ->
             (try
               float (s) |> DFloat |> Value
-             with e ->
-               Value(errStr ("Expected a string representation of an IEEE float")))
-        | args -> incorrectArgs ())
+             with e -> err (Errors.argumentWasnt "a stringified float" "s" dv))
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "toFloat" 1) }
@@ -215,7 +223,7 @@ let fns : List<BuiltInFn> =
                |> Error
                |> DResult
                |> Value)
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -226,8 +234,8 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DStr s ] -> Value(DStr(String.toUpper s))
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlFunction "upper"
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "toUppercase" 1) }
     { name = fn "String" "toUppercase" 1
@@ -237,8 +245,8 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DStr s ] -> Value(DStr(String.toUpper s))
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlFunction "upper"
       previewable = Pure
       deprecated = NotDeprecated }
     { name = fn "String" "toLowercase" 0
@@ -248,10 +256,10 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DStr s ] -> Value(DStr(String.toLower s))
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlFunction "lower"
       previewable = Pure
-      deprecated = ReplacedBy(fn "" "" 0) }
+      deprecated = ReplacedBy(fn "String" "toLowercase" 1) }
     { name = fn "String" "toLowercase" 1
       parameters = [ Param.make "s" TStr "" ]
       returnType = TStr
@@ -259,8 +267,8 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DStr s ] -> Value(DStr(String.toLower s))
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlFunction "lower"
       previewable = Pure
       deprecated = NotDeprecated }
     { name = fn "String" "length" 0
@@ -271,8 +279,8 @@ let fns : List<BuiltInFn> =
         (function
         | _, [ DStr s ] ->
             s |> System.Text.ASCIIEncoding.UTF8.GetByteCount |> Dval.int |> Value
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlFunction "length"
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "length" 1) }
     { name = fn "String" "length" 1
@@ -282,8 +290,8 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DStr s ] -> s |> String.lengthInEgcs |> Dval.int |> Value
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec = NotYetImplementedTODO // there isn't a unicode version of length
       previewable = Pure
       deprecated = NotDeprecated }
     { name = fn "String" "append" 0
@@ -311,7 +319,7 @@ let fns : List<BuiltInFn> =
                 )
               )
             )
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "append" 1) }
@@ -324,7 +332,7 @@ let fns : List<BuiltInFn> =
         (function
         // TODO add fuzzer to ensure all strings are normalized no matter what we do to them.
         | _, [ DStr s1; DStr s2 ] -> Value(DStr((s1 + s2).Normalize()))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -336,7 +344,7 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DStr s1; DStr s2 ] -> Value(DStr(s2 + s1))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -364,7 +372,7 @@ let fns : List<BuiltInFn> =
             |> DStr
             |> Value
 
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "slugify" 1) }
@@ -391,7 +399,7 @@ let fns : List<BuiltInFn> =
             |> String.toLower
             |> DStr
             |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "slugify" 2) }
@@ -421,7 +429,7 @@ let fns : List<BuiltInFn> =
             |> String.toLower
             |> DStr
             |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -433,8 +441,8 @@ let fns : List<BuiltInFn> =
         (function
         | _, [ DStr s ] ->
             String.toEgcSeq s |> Seq.rev |> String.concat "" |> DStr |> Value
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlFunction "reverse"
       previewable = Pure
       deprecated = NotDeprecated }
     { name = fn "String" "split" 0
@@ -450,7 +458,7 @@ let fns : List<BuiltInFn> =
             |> List.map (fun str -> DStr str)
             |> DList
             |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -466,14 +474,11 @@ let fns : List<BuiltInFn> =
                 (fun s ->
                   match s with
                   | DStr st -> st
-                  | _ ->
-                      raise (
-                        RuntimeException(JustAString(SourceNone, "Expected String"))
-                      ))
+                  | _ -> Errors.throw (Errors.expectedLambdaType TStr s))
                 l
 
             Value(DStr((String.concat sep strs).Normalize()))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -481,13 +486,7 @@ let fns : List<BuiltInFn> =
       parameters = [ Param.make "l" (TList TChar) "" ]
       returnType = TStr
       description = "Returns the list of characters as a string"
-      fn =
-        (fun _ ->
-          raise (
-            RuntimeException(
-              JustAString(SourceNone, "This function no longer exists.")
-            )
-          ))
+      fn = Errors.removedFunction
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "fromList" 1) }
@@ -503,12 +502,11 @@ let fns : List<BuiltInFn> =
               |> List.map
                    (function
                    | DChar c -> c
-                   | dv ->
-                       raise (RuntimeException(LambdaResultHasWrongType(dv, TChar))))
+                   | dv -> Errors.throw (Errors.expectedLambdaType TChar dv))
               |> String.concat ""
             )
             |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -516,7 +514,7 @@ let fns : List<BuiltInFn> =
       parameters = [ Param.make "c" TChar "" ]
       returnType = TChar
       description = "Converts a char to a string"
-      fn = (fun _ -> failwith "This function no longer exists.")
+      fn = Errors.removedFunction
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "fromChar" 1) }
@@ -527,7 +525,7 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DChar c ] -> Value(DStr(c))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -538,13 +536,13 @@ let fns : List<BuiltInFn> =
         "URLBase64 encodes a string without padding. Uses URL-safe encoding with `-` and `_` instead of `+` and `/`, as defined in RFC 4648 section 5."
       fn =
         (function
-        | _, [ DStr s ] -> String.base64UrlEncode s |> DStr |> Value
-        | args -> incorrectArgs ())
+        | _, [ DStr s ] -> Prelude.base64UrlEncode s |> DStr |> Value
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
     //      { name = fn "String" "base64Decode" 0
-//      ; parameters = [Param.make "s" TStr]
+//      ; parameters = [Param.make "s" TStr ""]
 //      ; returnType = TStr
 //      ; description =
 //       "Base64 decodes a string. Works with both the URL-safe and standard Base64 alphabets defined in RFC 4648 sections 4 and 5."
@@ -552,24 +550,24 @@ let fns : List<BuiltInFn> =
 //         (function
 //         | _, [DStr s] ->
 //           ( try
-//               Dval.dstr_of_string_exn
+//               DStr
 //                 (B64.decode
 //                    B64.uri_safe_alphabet
 //                    (Unicode_string.to_string s))
 //             with Not_found_s _ | Caml.Not_found ->
 //               ( try
-//                   Dval.dstr_of_string_exn
+//                   DStr
 //                     (B64.decode
 //                        B64.default_alphabet
 //                        (Unicode_string.to_string s))
 //                 with Not_found_s _ | Caml.Not_found ->
 //                   RT.error
-//                       (Dval.dstr_of_string_exn (Unicode_string.to_string s))
+//                       (DStr (Unicode_string.to_string s))
 //                     "Not a valid base64 string" ) )
-//         | args ->
+//         | _ ->
 //             incorrectArgs ())
 //      ; sqlSpec = NotYetImplementedTODO
-//      ; previewable = Pure
+//    ; previewable = Pure
 //      ; deprecated = NotDeprecated }
     { name = fn "String" "digest" 0
       parameters = [ Param.make "s" TStr "" ]
@@ -587,7 +585,7 @@ Don't rely on either the size or the algorithm."
             System.Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_')
             |> DStr
             |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -607,10 +605,10 @@ Don't rely on either the size or the algorithm."
             System.Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_')
             |> DStr
             |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
-      deprecated = ReplacedBy(fn "" "" 0) }
+      deprecated = ReplacedBy(fn "Crypto" "sha384" 0) }
     { name = fn "String" "sha256" 0
       parameters = [ Param.make "s" TStr "" ]
       returnType = TStr
@@ -627,23 +625,19 @@ Don't rely on either the size or the algorithm."
             System.Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_')
             |> DStr
             |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
-      deprecated = ReplacedBy(fn "" "" 0) }
+      deprecated = ReplacedBy(fn "Crypto" "sha256" 0) }
     { name = fn "String" "random" 0
       parameters = [ Param.make "length" TInt "" ]
       returnType = TStr
       description = "Generate a string of length `length` from random characters."
       fn =
         (function
-        | _, [ DInt l ] ->
+        | _, [ DInt l as dv ] ->
             if l < 0I then
-              raise (
-                RuntimeException(
-                  JustAString(SourceNone, "l should be a positive integer")
-                )
-              )
+              err (Errors.argumentWasnt "positive" "length" dv)
             else
               let randomString length =
                 let gen () =
@@ -659,7 +653,7 @@ Don't rely on either the size or the algorithm."
                 |> String.concat ""
 
               randomString (int l) |> DStr |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Impure
       deprecated = ReplacedBy(fn "String" "random" 1) }
@@ -687,7 +681,7 @@ Don't rely on either the size or the algorithm."
                 |> String.concat ""
 
               randomString (int l) |> DStr |> Ok |> DResult |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Impure
       deprecated = ReplacedBy(fn "String" "random" 1) }
@@ -697,9 +691,9 @@ Don't rely on either the size or the algorithm."
       description = "Generate a string of length `length` from random characters."
       fn =
         (function
-        | _, [ DInt l ] ->
+        | _, [ DInt l as dv ] ->
             if l < 0I then
-              Value(errStr ("l should be a positive integer"))
+              err (Errors.argumentWasnt "positive" "length" dv)
             else
               let randomString length =
                 let gen () =
@@ -715,7 +709,7 @@ Don't rely on either the size or the algorithm."
                 |> String.concat ""
 
               randomString (int l) |> DStr |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Impure
       deprecated = NotDeprecated }
@@ -734,18 +728,18 @@ Don't rely on either the size or the algorithm."
                   | '<' -> "&lt;"
                   | '>' -> "&gt;"
                   | '&' -> "&amp;"
-                  (* include these for html-attribute-escaping
-                            even though they're not strictly necessary
-                            for html-escaping proper. *)
+                  // include these for html-attribute-escaping
+                  // even though they're not strictly necessary
+                  // for html-escaping proper.
                   | '"' -> "&quot;"
-                  (* &apos; doesn't work in IE.... *)
+                  // &apos; doesn't work in IE....
                   | ''' -> "&#x27;"
                   | _ -> string c)
                 (Seq.toList html)
               |> String.concat ""
 
             Value(DStr(htmlEscape s))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Impure
       deprecated = NotDeprecated }
@@ -760,12 +754,11 @@ Don't rely on either the size or the algorithm."
             match Guid.TryParse s with
             | true, x -> x |> DUuid |> Value
             | _ ->
-                Value(
-                  errStr (
-                    "`uuid` parameter was not of form XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
-                  )
+                err (
+                  "`uuid` parameter was not of form XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
                 )
-        | args -> incorrectArgs ())
+
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "toUUID" 1) }
@@ -785,7 +778,7 @@ Don't rely on either the size or the algorithm."
                 |> Error
                 |> DResult
                 |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -798,7 +791,7 @@ Don't rely on either the size or the algorithm."
         (function
         | _, [ DStr needle; DStr haystack ] ->
             DBool(haystack.Contains needle) |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = ReplacedBy(fn "String" "isSubstring" 1) }
@@ -811,10 +804,14 @@ Don't rely on either the size or the algorithm."
         (function
         | _, [ DStr haystack; DStr needle ] ->
             DBool(haystack.Contains needle) |> Value
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec =
+        SqlCallback2
+          (fun lookingIn searchingFor ->
+            // strpos returns indexed from 1; 0 means missing
+            $"(strpos({lookingIn}, {searchingFor}) > 0)")
       previewable = Pure
-      deprecated = ReplacedBy(fn "" "" 0) }
+      deprecated = ReplacedBy(fn "String" "contains" 0) }
     { name = fn "String" "contains" 0
       parameters =
         [ Param.make "lookingIn" TStr ""; Param.make "searchingFor" TStr "" ]
@@ -823,8 +820,12 @@ Don't rely on either the size or the algorithm."
       fn =
         (function
         | _, [ DStr haystack; DStr needle ] -> Value(DBool(haystack.Contains needle))
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec =
+        SqlCallback2
+          (fun lookingIn searchingFor ->
+            // strpos returns indexed from 1; 0 means missing
+            $"strpos({lookingIn}, {searchingFor}) > 0")
       previewable = Pure
       deprecated = NotDeprecated }
     { name = fn "String" "slice" 0
@@ -883,7 +884,7 @@ Don't rely on either the size or the algorithm."
 
             let first, last = (f, l) in
             Value(DStr(slice s first last))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -920,7 +921,7 @@ Don't rely on either the size or the algorithm."
               stringBuilder.ToString()
 
             Value(DStr(firstN s n))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -965,7 +966,7 @@ Don't rely on either the size or the algorithm."
               stringBuilder.ToString()
 
             Value(DStr(lastN s n))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -1008,7 +1009,7 @@ Don't rely on either the size or the algorithm."
               stringBuilder.ToString()
 
             Value(DStr(dropLastN s n))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -1044,7 +1045,7 @@ Don't rely on either the size or the algorithm."
               stringBuilder.ToString()
 
             Value(DStr(dropFirstN s n))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -1058,7 +1059,7 @@ Don't rely on either the size or the algorithm."
       If the `string` is longer than `goalLength`, returns an unchanged copy of `string`."
       fn =
         (function
-        | state, [ DStr s; DStr padWith; DInt l ] ->
+        | state, [ DStr s; DStr padWith as dv; DInt l ] ->
 
             let egcSeq = String.toEgcSeq s
 
@@ -1095,14 +1096,8 @@ Don't rely on either the size or the algorithm."
               let l = int l in
               Value(DStr(padStart s padWith l))
             else
-              Value(
-                errStr (
-                  $"Expected the argument `padWith` passed to ` String:padStart ` to be one character long. However, `({
-                                                                                                                          padWith
-                  }).` is characters long."
-                )
-              )
-        | args -> incorrectArgs ())
+              err (Errors.argumentWasnt "1 character long" "padWith" dv)
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -1116,35 +1111,35 @@ Don't rely on either the size or the algorithm."
       If the `string` is longer than `goalLength`, returns an unchanged copy of `string`."
       fn =
         (function
-        | state, [ DStr s; DStr padWith; DInt l ] ->
+        | state, [ DStr s; DStr padWith as dv; DInt l ] ->
 
             let egcSeq = String.toEgcSeq s
 
             let padEnd s padWith targetEgcs =
               let max a b = if a > b then a else b in
-              (* Compute the size in bytes and # of required EGCs for s and padWith: *)
+              // Compute the size in bytes and # of required EGCs for s and padWith:
               let padSize = String.length padWith in
 
               let padEgcs = length padWith in
               let stringSize = String.length s in
               let stringEgcs = length egcSeq in
-              (* Compute how many copies of padWith we require,
-               * accounting for the string longer than [targetEgcs]: *)
+              // Compute how many copies of padWith we require,
+              // accounting for the string longer than [targetEgcs]:
               let requiredEgcs = targetEgcs - stringEgcs in
 
               let requiredPads =
                 max 0 (if padEgcs = 0 then 0 else requiredEgcs / padEgcs) in
-              (* Create a buffer large enough to hold the padded result: *)
+              // Create a buffer large enough to hold the padded result:
               let requiredSize = stringSize + (requiredPads * padSize) in
 
               let stringBuilder = new StringBuilder(requiredSize) in
-              (* Start the buffer with the string: *)
+              // Start the buffer with the string: *)
               stringBuilder.Append s |> ignore
-              (* Finish by filling with the required number of pads: *)
+              // Finish by filling with the required number of pads:
               for i = 1 to requiredPads do
                 stringBuilder.Append padWith |> ignore
-              (* Renormalize because concatenation may break normalization
-               * (see https://unicode.org/reports/tr15/#Concatenation): *)
+              // Renormalize because concatenation may break normalization
+              // (see https://unicode.org/reports/tr15/#Concatenation):
 
               stringBuilder.ToString().Normalize()
 
@@ -1154,14 +1149,8 @@ Don't rely on either the size or the algorithm."
               let l = int l in
               Value(DStr(padEnd s padWith l))
             else
-              Value(
-                errStr (
-                  $"Expected the argument `padWith` passed to ` String:padEnd ` to be one character long. However, `({
-                                                                                                                        padWith
-                  }).` is characters long."
-                )
-              )
-        | args -> incorrectArgs ())
+              err (Errors.argumentWasnt "1 character long" "padWith" dv)
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -1173,38 +1162,34 @@ Don't rely on either the size or the algorithm."
       fn =
         (function
         | _, [ DStr toTrim ] -> Value(DStr(toTrim.Trim()))
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlFunction "trim"
       previewable = Pure
       deprecated = NotDeprecated }
-    //      { name = fn "String" "trimStart" 0
-//      ; parameters = [Param.make "str" TStr]
-//      ; returnType = TStr
-//      ; description =
-//       "Returns a copy of `str` with all leading whitespace removed. 'whitespace' here means all Unicode characters with the `White_Space` property, which includes \" \", \"\\t\" and \"\\n\"."
-//      ; fn =
-//         (function
-//         | _, [DStr to_trim] ->
-//             DStr (Unicode_string.trim_start to_trim)
-//         | args ->
-//             incorrectArgs ())
-//      ; sqlSpec = NotYetImplementedTODO
-//      ; previewable = Pure
-//      ; deprecated = NotDeprecated }
-//      { name = fn "String" "trimEnd" 0
-//      ; parameters = [Param.make "str" TStr]
-//      ; returnType = TStr
-//      ; description =
-//       "Returns a copy of `str` with all trailing whitespace removed. 'whitespace' here means all Unicode characters with the `White_Space` property, which includes \" \", \"\\t\" and \"\\n\"."
-//      ; fn =
-//         (function
-//         | _, [DStr to_trim] ->
-//             DStr (Unicode_string.trim_end to_trim)
-//         | args ->
-//             incorrectArgs ())
-//      ; sqlSpec = NotYetImplementedTODO
-//      ; previewable = Pure
-//      ; deprecated = NotDeprecated }
+    { name = fn "String" "trimStart" 0
+      parameters = [ Param.make "str" TStr "" ]
+      returnType = TStr
+      description =
+        "Returns a copy of `str` with all leading whitespace removed. 'whitespace' here means all Unicode characters with the `White_Space` property, which includes \" \", \"\\t\" and \"\\n\"."
+      fn =
+        (function
+        | _, [ DStr toTrim ] -> Value(DStr(toTrim.TrimStart()))
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlFunction "ltrim"
+      previewable = Pure
+      deprecated = NotDeprecated }
+    { name = fn "String" "trimEnd" 0
+      parameters = [ Param.make "str" TStr "" ]
+      returnType = TStr
+      description =
+        "Returns a copy of `str` with all trailing whitespace removed. 'whitespace' here means all Unicode characters with the `White_Space` property, which includes \" \", \"\\t\" and \"\\n\"."
+      fn =
+        (function
+        | _, [ DStr toTrim ] -> Value(DStr(toTrim.TrimEnd()))
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlFunction "rtrim"
+      previewable = Pure
+      deprecated = NotDeprecated }
     { name = fn "String" "toBytes" 0
       parameters = [ Param.make "str" TStr "" ]
       returnType = TBytes
@@ -1215,7 +1200,7 @@ Don't rely on either the size or the algorithm."
         | _, [ DStr str ] ->
             let theBytes = System.Text.Encoding.UTF8.GetBytes str in
             Value(DBytes theBytes)
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -1226,7 +1211,7 @@ Don't rely on either the size or the algorithm."
       fn =
         (function
         | _, [ DStr subject; DStr prefix ] -> Value(DBool(subject.StartsWith prefix))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -1239,7 +1224,7 @@ Don't rely on either the size or the algorithm."
       fn =
         (function
         | _, [ DStr subject; DStr suffix ] -> Value(DBool(subject.EndsWith suffix))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated } ]

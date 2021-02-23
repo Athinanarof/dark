@@ -8,6 +8,8 @@ open FSharpPlus
 
 let fn = FQFnName.stdlibName
 
+let incorrectArgs = LibExecution.Errors.incorrectArgs
+
 let fns : List<BuiltInFn> =
   [ { name = fn "Bool" "not" 0
       parameters = [ Param.make "b" TBool "" ]
@@ -17,8 +19,8 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DBool b ] -> Value(DBool(not b))
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlFunction "not"
       previewable = Pure
       deprecated = NotDeprecated }
     { name = fn "Bool" "and" 0
@@ -28,8 +30,8 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DBool a; DBool b ] -> Value(DBool(a && b))
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlBinOp "AND"
       previewable = Pure
       deprecated = NotDeprecated }
     { name = fn "Bool" "or" 0
@@ -39,8 +41,8 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DBool a; DBool b ] -> Value(DBool(a || b))
-        | args -> incorrectArgs ())
-      sqlSpec = NotYetImplementedTODO
+        | _ -> incorrectArgs ())
+      sqlSpec = SqlBinOp "OR"
       previewable = Pure
       deprecated = NotDeprecated }
     { name = fn "Bool" "xor" 0
@@ -51,7 +53,7 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DBool a; DBool b ] -> Value(DBool(a <> b))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -62,11 +64,12 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ value ] ->
-            Value
-              (match value with
-               | DNull -> DBool true
-               | _ -> DBool false)
-        | args -> incorrectArgs ())
+            Value(
+              match value with
+              | DNull -> DBool true
+              | _ -> DBool false
+            )
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -77,11 +80,12 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ value ] ->
-            Value
-              (match value with
-               | DFakeVal (DError _) -> DBool true
-               | _ -> DBool false)
-        | args -> incorrectArgs ())
+            Value(
+              match value with
+              | DFakeVal (DError _) -> DBool true
+              | _ -> DBool false
+            )
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated =

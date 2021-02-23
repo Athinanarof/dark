@@ -1,7 +1,15 @@
 module LibBackend.StdLib.StdLib
 
-open FSharp.Control.Tasks
-open LibExecution.RuntimeTypes
-open LibExecution.Interpreter
+module RT = LibExecution.RuntimeTypes
 
-let fns : List<BuiltInFn> = []
+let fns : List<RT.BuiltInFn> =
+    LibDB.fns
+    @ LibCrypto.fns
+    @ LibDarkInternal.fns
+    @ LibEvent.fns
+    @ LibHttpClient.fns
+    @ LibJwt.fns
+    @ LibStaticAssets.fns
+    @ LibTwilio.fns
+    @ LibX509.fns
+    @ LibDB2.fns

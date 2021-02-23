@@ -11,13 +11,7 @@ module LibBackend.ProgramSerialization.ProgramTypes
 // different format if you must, or track the other code along-side this and
 // use the ID to find it).
 
-open System.Runtime.InteropServices
-open System.Threading.Tasks
-open FSharp.Control.Tasks
 open FSharpPlus
-open Npgsql.FSharp
-open Npgsql
-open System.Text.RegularExpressions
 
 open Prelude
 open Tablecloth
@@ -39,10 +33,9 @@ module FQFnName =
       let module_ = if this.module_ = "" then "" else $"{this.module_}::"
       let fn = $"{module_}{this.function_}_v{this.version}"
 
-      if this.owner = "dark" && this.package = "stdlib" then
-        fn
-      else
-        $"{this.owner}/{this.package}/{fn}"
+      if this.owner = "dark" && this.package = "stdlib" then fn
+      else if this.owner = "" && this.package = "" then fn
+      else $"{this.owner}/{this.package}/{fn}"
 
     member this.toRuntimeType() : RT.FQFnName.T =
       { owner = this.owner
@@ -51,16 +44,17 @@ module FQFnName =
         function_ = this.function_
         version = this.version }
 
-  let name
+  let namePat = @"^[a-z][a-z0-9_]*$"
+  let modNamePat = @"^[A-Z][a-z0-9A-Z_]*$"
+  let fnnamePat = @"^([a-z][a-z0-9A-Z_]*|[-+><&|!=^%/*]{1,2})$"
+
+  let packageName
     (owner : string)
     (package : string)
     (module_ : string)
     (function_ : string)
     (version : int)
     : T =
-    let namePat = @"^[a-z][a-z0-9_]*$"
-    let modNamePat = @"^[A-Z][a-z0-9A-Z_]*$"
-    let fnnamePat = @"^([a-z][a-z0-9A-Z_]*|[-+><&|!=^%/*]{1,2})$"
     assertRe "owner must match" namePat owner
     assertRe "package must match" namePat package
     if module_ <> "" then assertRe "modName name must match" modNamePat module_
@@ -72,6 +66,13 @@ module FQFnName =
       module_ = module_
       function_ = function_
       version = version }
+
+  let userFnName (fnName : string) : T =
+    assertRe "function name must match" fnnamePat fnName
+    { owner = ""; package = ""; module_ = ""; function_ = fnName; version = 0 }
+
+  let stdlibName (module_ : string) (function_ : string) (version : int) : T =
+    packageName "dark" "stdlib" module_ function_ version
 
   let parse (fnName : string) : T =
     let owner, package, module_, function_, version =
@@ -86,16 +87,17 @@ module FQFnName =
           ("dark", "stdlib", module_, name, 0)
       | Regex "^([a-z][a-z0-9A-Z_]*)_v(\d+)$" [ name; version ] ->
           ("dark", "stdlib", "", name, int version)
+      | Regex "^Date::([-+><&|!=^%/*]{1,2})$" [ name ] ->
+          ("dark", "stdlib", "Date", name, 0)
       | Regex "^([-+><&|!=^%/*]{1,2})$" [ name ] -> ("dark", "stdlib", "", name, 0)
       | Regex "^([-+><&|!=^%/*]{1,2})_v(\d+)$" [ name; version ] ->
           ("dark", "stdlib", "", name, int version)
       | Regex "^([a-z][a-z0-9A-Z_]*)$" [ name ] -> ("dark", "stdlib", "", name, 0)
       | _ -> failwith $"Bad format in function name: \"{fnName}\""
 
-    name owner package module_ function_ version
+    packageName owner package module_ function_ version
 
-  let stdlibName (module_ : string) (function_ : string) (version : int) : T =
-    name "dark" "stdlib" module_ function_ version
+
 
 type Expr =
   | EInteger of id * bigint
@@ -534,19 +536,16 @@ module Shortcuts =
   let eList (elems : Expr list) : Expr = EList(gid (), elems)
   let ePipeTarget () = EPipeTarget(gid ())
 
-
   let ePartial (str : string) (e : Expr) : Expr = EPartial(gid (), str, e)
 
   let eRightPartial (str : string) (e : Expr) : Expr = ERightPartial(gid (), str, e)
 
-
   let eLeftPartial (str : string) (e : Expr) : Expr = ELeftPartial(gid (), str, e)
-
 
   let eVar (name : string) : Expr = EVariable(gid (), name)
 
-  (* let fieldAccess (expr : Expr) (fieldName : string) : Expr = *)
-  (*   EFieldAccess (gid () ,expr, fieldName) *)
+  let eFieldAccess (expr : Expr) (fieldName : string) : Expr =
+    EFieldAccess(gid (), expr, fieldName)
 
   let eIf (cond : Expr) (then' : Expr) (else' : Expr) : Expr =
     EIf(gid (), cond, then', else')
@@ -631,7 +630,7 @@ type DType =
   | TError
   | TLambda
   | THttpResponse of DType
-  | TDB
+  | TDB of DType
   | TDate
   | TChar
   | TPassword
@@ -665,7 +664,7 @@ type DType =
     | TError -> RT.TError
     | TLambda -> RT.TLambda
     | THttpResponse typ -> RT.THttpResponse(typ.toRuntimeType ())
-    | TDB -> RT.TDB
+    | TDB typ -> RT.TDB(typ.toRuntimeType ())
     | TDate -> RT.TDate
     | TChar -> RT.TChar
     | TPassword -> RT.TPassword
@@ -705,7 +704,7 @@ type DType =
     | "incomplete" -> TIncomplete
     | "error" -> TError
     | "response" -> THttpResponse TAny
-    | "datastore" -> TDB
+    | "datastore" -> TDB TAny
     | "date" -> TDate
     | "password" -> TPassword
     | "uuid" -> TUuid
@@ -735,9 +734,6 @@ type DType =
           str |> String.dropLeft 1 |> String.dropRight 1 |> parseListTyp
         else
           failwith $"Unhandled DType.parse: {str}"
-
-
-
 
 
 module Handler =
@@ -778,6 +774,48 @@ module Handler =
       | Cron (name, interval, _ids) -> RT.Handler.Cron(name, interval)
       | REPL (name, _ids) -> RT.Handler.REPL(name)
 
+    member this.name() =
+      match this with
+      | HTTP (route, method, _ids) -> route
+      | Worker (name, _ids) -> name
+      | OldWorker (modulename, name, _ids) -> name
+      | Cron (name, interval, _ids) -> name
+      | REPL (name, _ids) -> name
+
+    member this.modifier() =
+      match this with
+      | HTTP (route, method, _ids) -> method
+      | Worker (name, _ids) -> "_"
+      | OldWorker (modulename, name, _ids) -> "_"
+      | Cron (name, interval, _ids) -> interval
+      | REPL (name, _ids) -> "_"
+
+    member this.module'() =
+      match this with
+      | HTTP (route, method, _ids) -> "HTTP"
+      | Worker (name, _ids) -> "Worker"
+      | OldWorker (modulename, name, _ids) -> modulename
+      | Cron (name, interval, _ids) -> "Cron"
+      | REPL (name, _ids) -> "REPL"
+
+    member this.complete() : bool =
+      match this with
+      | HTTP ("", _, _) -> false
+      | HTTP (_, "", _) -> false
+      | Worker ("", _) -> false
+      | OldWorker ("", _, _) -> false
+      | OldWorker (_, "", _) -> false
+      | Cron ("", _, _) -> false
+      | Cron (_, "", _) -> false
+      | REPL ("", _) -> false
+      | _ -> true
+
+    // Same as a TraceInput.EventDesc
+    member this.toDesc() : Option<string * string * string> =
+      if this.complete () then
+        Some(this.name (), this.name (), this.modifier ())
+      else
+        None
 
   type T =
     { tlid : tlid
@@ -804,6 +842,7 @@ module DB =
     member this.toRuntimeType() : RT.DB.T =
       { tlid = this.tlid
         name = this.name
+        version = this.version
         cols =
           List.filterMap
             (fun c ->
@@ -848,13 +887,13 @@ module UserFunction =
   type Parameter =
     { name : string
       nameID : id
-      type' : DType
+      typ : Option<DType>
       typeID : id
       description : string }
 
     member this.toRuntimeType() : RT.UserFunction.Parameter =
       { name = this.name
-        type' = this.type'.toRuntimeType ()
+        typ = (Option.unwrap TAny this.typ).toRuntimeType()
         description = this.description }
 
   type T =
@@ -866,7 +905,7 @@ module UserFunction =
       returnTypeID : id
       description : string
       infix : bool
-      ast : Expr }
+      body : Expr }
 
     member this.toRuntimeType() : RT.UserFunction.T =
       { tlid = this.tlid
@@ -876,7 +915,7 @@ module UserFunction =
         returnType = this.returnType.toRuntimeType ()
         description = this.description
         infix = this.infix
-        ast = this.ast.toRuntimeType () }
+        body = this.body.toRuntimeType () }
 
 type Toplevel =
   | TLHandler of Handler.T
@@ -897,6 +936,15 @@ type Toplevel =
     | TLDB db -> RT.TLDB(db.toRuntimeType ())
     | TLFunction f -> RT.TLFunction(f.toRuntimeType ())
     | TLType t -> RT.TLType(t.toRuntimeType ())
+
+module Secret =
+  type T =
+    { secretName : string
+      secretValue : string }
+
+    member this.toRuntimeType() : RT.Secret.T =
+      { secretName = this.secretName; secretValue = this.secretValue }
+
 
 type DeprecatedMigrationKind = | DeprecatedMigrationKind
 

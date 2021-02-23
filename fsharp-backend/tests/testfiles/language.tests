@@ -158,6 +158,9 @@ Nothing = Nothing
 ((List.head_v1 []) == Nothing) = true
 
 [tests.incomplete_propagation]
+List.head_v0 blank = blank
+(if blank then 5 else 6) = blank
+(List.head_v0 blank).field = blank
 [ 5; 6; List.head_v0 blank ] = [ 5; 6 ]
 [ 5; 6; blank] = [ 5, 6 ]
 { i = blank; m = 5; j = List.head_v0 blank; n = 6 } = { n = 6; m = 5 }
@@ -165,6 +168,12 @@ Nothing = Nothing
 5 |> (+) blank |> (+) 3564 = 3569
 5 |> (+) blank = 5
 (let x = blank in (5 |> x)) = 5
+Just blank = blank
+Error blank = blank
+Ok blank = blank
+
+[tests.error]
+List.map_v0 [1;2;3;4;5] (fun x y -> x) = Test.typeError_v0 "Expected 2 arguments, got 1"
 
 [tests.errorrail]
 Dict.get_v1 {} "i" = Nothing
@@ -174,9 +183,10 @@ Dict.get_v1_ster {} "i" = Test.errorRailNothing_v0_ster
 
 [tests.errorrailPropagation]
 List.push_v0 [1;2;3;4] (List.head_v1_ster []) = Test.errorRailNothing_v0_ster
-//List.filter_v1 [1;2;3;4] (fun x -> List.head_v1_ster []) = ErrorRail Nothing
+// List.filter_v1 [1;2;3;4] (fun x -> List.head_v1_ster []) = Test.errorRailNothing_v0_ster
 List.map_v0 [1;2;3;4] (fun x -> List.head_v1_ster []) = Test.errorRailNothing_v0_ster
-//List.fold_v0 [1;2;3;4] 1 (fun x y -> List.head_v1 []) = Test.errorRailNothing_v0_ster
+List.fold_v0 [1;2;3;4] 1 (fun x y -> List.head_v1_ster []) = Test.errorRailNothing_v0_ster
+List.map_v0 [1;2;3;4] (fun x -> blank) = blank
 ({ x = (List.head_v1_ster []) }) = Test.errorRailNothing_v0_ster
 Error (List.head_v1_ster []) = Test.errorRailNothing_v0_ster
 
@@ -193,3 +203,22 @@ Error (List.head_v1_ster []) = Test.errorRailNothing_v0_ster
 (let x = 35 in (match Ok 6 with | Ok x -> (List.map_v0 [1; 2; 3; 4] (fun x -> x + 2)))) = [ 3; 4; 5; 6]
 (List.map_v0 [1;2;3;4] (fun x -> (let x = 35 in (match Ok 6 with | Ok x -> x + 2)))) = [ 8; 8; 8; 8 ]
 (List.map_v0 [1;2;3;4] (fun x -> (match Ok 6 with | Ok x -> let x = 9 in x + 2))) = [ 11; 11; 11; 11 ]
+
+[tests.records]
+{ col1 = 1 ; col1 = 2 } = Test.typeError_v0 "Duplicate key: col1"
+{ col1 = 1 ; col2 = 3 } = { col1 = 1 ; col2 = 3 }
+{ col1 = 2 ; col2 = blank } = { col1 = 2 }
+//({ col1 = 2 ; ```` = blank }) = ({ col1 = 2 }) // todo: do unit test instead
+{ col1 = 2 ; col2 = Test.typeError_v0 "test" } = Test.typeError_v0 "test"
+{ col1 = 2 ; col2 = (List.head_v1_ster []) } = Test.errorRailNothing_v0
+
+
+[tests.featureflag]
+flag "test" true "old" "new" = "new" // show new for true
+flag "test" false "old" "new" = "old" // show old for false
+flag "test" blank "old" "new" = "old" // show old for incomplete condition
+flag "test" null "old" "new" = "old" // show old for null
+flag "test" (Test.typeError_v0 "testerror") "old" "new" = "old" // show old for error
+flag "test" (List.head_v1_ster []) "old" "new" = "old" // show old for errorrail
+flag "test" {x = true} "old" "new" = "old" // show old for object
+flag "test" [true] "old" "new" = "old" // show old for list

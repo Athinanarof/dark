@@ -7,6 +7,10 @@ open FSharpPlus
 open Npgsql
 open Npgsql.FSharp.Tasks
 
+open Prelude
+
+module RT = LibExecution.RuntimeTypes
+
 let connectionString =
   Sql.host LibService.Config.pghost
   |> Sql.port 5432
@@ -45,9 +49,6 @@ module Sql =
     | [] -> None
     | list -> failwith $"Too many results, expected 0 or 1, got {list}"
 
-
-
-
   // FSTODO do a better job of naming these
   let executeExistsAsync (props : Sql.SqlProps) : Task<bool> =
     task {
@@ -55,12 +56,11 @@ module Sql =
       | [ true ] -> return true
       | [] -> return false
       | result -> return failwith $"Too many results, expected 1, got {result}"
-
     }
 
   let executeExists (props : Sql.SqlProps) : bool =
-    match Sql.execute (fun read -> read.NpgsqlReader.GetInt32 0) props with
-    | [ 1 ] -> true
+    match Sql.execute (fun read -> read.NpgsqlReader.GetBoolean 0) props with
+    | [ true ] -> true
     | [] -> false
     | result -> failwith $"Too many results, expected 1, got {result}"
 
@@ -76,7 +76,6 @@ module Sql =
     ()
 
 
-
   let id (id : uint64) : SqlValue =
     // In the DB, it's actually an int64
     let typ = NpgsqlTypes.NpgsqlDbType.Bigint
@@ -84,6 +83,12 @@ module Sql =
     idParam.Value <- int64 id
     Sql.parameter idParam
 
+  let tlid (tlid : uint64) : SqlValue =
+    // In the DB, it's actually an int64
+    let typ = NpgsqlTypes.NpgsqlDbType.Bigint
+    let idParam = NpgsqlParameter("tlid", typ)
+    idParam.Value <- int64 tlid
+    Sql.parameter idParam
 
   let idArray (ids : List<uint64>) : SqlValue =
     // In the DB, it's actually an int64
@@ -91,3 +96,32 @@ module Sql =
     let idsParam = NpgsqlParameter("ids", typ)
     idsParam.Value <- ids |> List.map int64 |> List.toArray
     Sql.parameter idsParam
+
+  let queryableDvalMap (dvalmap : RT.DvalMap) : SqlValue =
+    let typ = NpgsqlTypes.NpgsqlDbType.Jsonb
+    let param = NpgsqlParameter("dvalmap", typ)
+    param.Value <- LibExecution.DvalRepr.toInternalQueryableV1 dvalmap
+    Sql.parameter param
+
+  let roundtrippableDval (dval : RT.Dval) : SqlValue =
+    let typ = NpgsqlTypes.NpgsqlDbType.Jsonb
+    let param = NpgsqlParameter("dval", typ)
+    param.Value <- LibExecution.DvalRepr.toInternalRoundtrippableV0 dval
+    Sql.parameter param
+
+  let roundtrippableDvalMap (dvalmap : RT.DvalMap) : SqlValue =
+    let typ = NpgsqlTypes.NpgsqlDbType.Jsonb
+    let param = NpgsqlParameter("dvalmap", typ)
+    param.Value <- LibExecution.DvalRepr.toInternalRoundtrippableV0 (RT.DObj dvalmap)
+    Sql.parameter param
+
+// Extension methods
+type RowReader with
+
+  member this.tlid(name : string) : tlid = this.int64 name |> uint64
+  member this.id(name : string) : id = this.int64 name |> uint64
+
+// member this.queryableDval(name : string) =
+//   this.string name |> LibExecution.DvalRepr.ofInternalQueryableV0
+// member this.roundtrippableDval(name : string) =
+//   this.string name |> LibExecution.DvalRepr.ofInternalRoundtrippableV0

@@ -6,12 +6,16 @@ open FSharpPlus
 
 open Prelude
 open LibExecution.RuntimeTypes
-open LibExecution.RuntimeTypes.Shortcuts
+open LibExecution.Shortcuts
 
 module Interpreter = LibExecution.Interpreter
-
+module Errors = LibExecution.Errors
 
 let fn = FQFnName.stdlibName
+
+let err (str : string) = Value(Dval.errStr str)
+
+let incorrectArgs = LibExecution.Errors.incorrectArgs
 
 let varA = TVariable "a"
 let varB = TVariable "b"
@@ -71,6 +75,7 @@ let varB = TVariable "b"
 
 // This is returned by a middlware and passed into the next middleware
 let middlewareReturnType = TFn([ TVariable "req" ], TVariable "resp")
+
 let middlewareNextParameter = Param.make "next" middlewareReturnType ""
 
 
@@ -82,7 +87,7 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | state, [] -> Value(DObj(Map []))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -96,15 +101,17 @@ let fns : List<BuiltInFn> =
         | state, [ DStr url ] ->
             let queryString = System.Uri(url).Query
             let nvc = System.Web.HttpUtility.ParseQueryString(queryString)
+
             nvc.AllKeys
-            |> Seq.map (fun key ->
-                 let values = nvc.GetValues(key)
-                 (key, DStr(values.[values.Length - 1])))
+            |> Seq.map
+                 (fun key ->
+                   let values = nvc.GetValues(key)
+                   (key, DStr(values.[values.Length - 1])))
             |> Seq.toList
             |> Map
             |> DObj
             |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -119,7 +126,7 @@ let fns : List<BuiltInFn> =
         (function
         // FSTODO
         | state, [] -> Value(DObj(Map []))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -132,7 +139,7 @@ let fns : List<BuiltInFn> =
         (function
         // FSTODO
         | state, [] -> Value(DObj(Map []))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -148,7 +155,7 @@ let fns : List<BuiltInFn> =
         (function
         // FSTODO
         | state, [] -> Value(DObj(Map []))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -164,7 +171,7 @@ let fns : List<BuiltInFn> =
         (function
         // FSTODO
         | state, [] -> Value(DObj(Map []))
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -178,9 +185,12 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | state,
-          [ DHttpResponse (code, headers, responseVal); DStr name; DStr value ] ->
-            Value(DHttpResponse(code, headers ++ [ name, value ], responseVal))
-        | args -> incorrectArgs ())
+          [ DHttpResponse (Response (code, headers), responseVal); DStr name;
+            DStr value ] ->
+            Value(
+              DHttpResponse(Response(code, headers ++ [ name, value ]), responseVal)
+            )
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -190,8 +200,8 @@ let fns : List<BuiltInFn> =
       description = "Return the body of a HTTP response"
       fn =
         (function
-        | state, [ DHttpResponse (_, _, responseVal) ] -> Value responseVal
-        | args -> incorrectArgs ())
+        | state, [ DHttpResponse (_, responseVal) ] -> Value responseVal
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -208,18 +218,18 @@ let fns : List<BuiltInFn> =
             [ "req" ]
             (eLet
               "response"
-               (ePipeApply (eVar "next") [ eVar "req" ])
-               (eFn
-                 "Http"
-                  "setHeader"
-                  0
-                  [ eVar "response"; eStr "server"; eStr "darklang" ]))
+              (ePipeApply (eVar "next") [ eVar "req" ])
+              (eFn
+                "Http"
+                "setHeader"
+                0
+                [ eVar "response"; eStr "server"; eStr "darklang" ]))
 
         (function
         | state, [ DFnVal _ as next ] ->
-            let st = Symtable.empty |> Symtable.add "next" next
+            let st = Map.empty |> Map.add "next" next
             Interpreter.eval state st code
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -245,12 +255,17 @@ let fns : List<BuiltInFn> =
 
                 let bytified =
                   response
-                  |> LibExecution.DvalRepr.toPrettyMachineJsonV1
-                  |> System.Text.Encoding.UTF8.GetBytes
+                  |> LibExecution.DvalRepr.toPrettyMachineJsonStringV1
+                  |> toBytes
                   |> DBytes
 
-                Value(DHttpResponse(200, [ "content-type", contentType ], bytified))
-        | args -> incorrectArgs ())
+                Value(
+                  DHttpResponse(
+                    Response(200, [ "content-type", contentType ]),
+                    bytified
+                  )
+                )
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -270,15 +285,15 @@ let fns : List<BuiltInFn> =
             [ "req" ]
             (eFn
               "Http"
-               "convertToResponseValue"
-               0
-               [ (ePipeApply (eVar "next") [ eVar "req" ]) ])
+              "convertToResponseValue"
+              0
+              [ (ePipeApply (eVar "next") [ eVar "req" ]) ])
 
         (function
         | state, [ DFnVal _ as next ] ->
-            let st = Symtable.empty |> Symtable.add "next" next
+            let st = Map.empty |> Map.add "next" next
             Interpreter.eval state st code
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -297,23 +312,23 @@ let fns : List<BuiltInFn> =
             [ "req" ]
             (eLet
               "response"
-               (ePipeApply (eVar "next") [ eVar "req" ])
-               (eLet
-                 "body"
-                  (eFn "Http" "responseBody" 0 [ eVar "response" ])
-                  (eFn
-                    "Http"
-                     "setHeader"
-                     0
-                     [ eVar "response"
-                       eStr "content-length"
-                       eFn "" "toString" 0 [ eFn "Bytes" "length" 0 [ eVar "body" ] ] ])))
+              (ePipeApply (eVar "next") [ eVar "req" ])
+              (eLet
+                "body"
+                (eFn "Http" "responseBody" 0 [ eVar "response" ])
+                (eFn
+                  "Http"
+                  "setHeader"
+                  0
+                  [ eVar "response"
+                    eStr "content-length"
+                    eFn "" "toString" 0 [ eFn "Bytes" "length" 0 [ eVar "body" ] ] ])))
 
         (function
         | state, [ DFnVal _ as next ] ->
-            let st = Symtable.empty |> Symtable.add "next" next
+            let st = Map.empty |> Map.add "next" next
             Interpreter.eval state st code
-        | _, args -> incorrectArgs ())
+        | _, _ -> incorrectArgs ())
 
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
@@ -351,29 +366,29 @@ let fns : List<BuiltInFn> =
                      eStdFnVal "Http" "addServerHeaderMiddleware" 0 ])
             (eLet
               "app"
-               (eFn
-                 "List"
-                  "fold"
-                  0
-                  [ eVar "fns"
-                    eVar "handler"
-                    eLambda
-                      [ "accum"; "curr" ]
-                      (ePipeApply (eVar "curr") [ eVar "accum" ]) ])
-               (ePipeApply (eVar "app") [ eVar "handler" ]))
+              (eFn
+                "List"
+                "fold"
+                0
+                [ eVar "fns"
+                  eVar "handler"
+                  eLambda
+                    [ "accum"; "curr" ]
+                    (ePipeApply (eVar "curr") [ eVar "accum" ]) ])
+              (ePipeApply (eVar "app") [ eVar "handler" ]))
 
 
         (function
         | state, [ DStr _ as url; DBytes _ as body; headers; DFnVal _ as handler ] ->
             let st =
-              Symtable.empty
-              |> Symtable.add "url" url
-              |> Symtable.add "body" body
-              |> Symtable.add "headers" headers
-              |> Symtable.add "handler" handler
+              Map.empty
+              |> Map.add "url" url
+              |> Map.add "body" body
+              |> Map.add "headers" headers
+              |> Map.add "handler" handler
 
             Interpreter.eval state st code
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated } ]

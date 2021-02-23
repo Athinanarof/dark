@@ -23,6 +23,10 @@ let (|Regex|_|) (pattern : string) (input : string) =
   let m = Regex.Match(input, pattern)
   if m.Success then Some(List.tail [ for g in m.Groups -> g.Value ]) else None
 
+let matches (pattern : string) (input : string) : bool =
+  let m = Regex.Match(input, pattern)
+  m.Success
+
 // ----------------------
 // Debugging
 // ----------------------
@@ -58,7 +62,7 @@ let assertEq (msg : string) (expected : 'a) (actual : 'a) : unit =
 
 let assertRe (msg : string) (pattern : string) (input : string) : unit =
   let m = Regex.Match(input, pattern)
-  if m.Success then () else assert_ $"{msg} ({input} ~= /{pattern}/)" false
+  if m.Success then () else assert_ $"{msg} (\"{input}\" ~= /{pattern}/)" false
 
 // ----------------------
 // Standard conversion functions
@@ -106,14 +110,25 @@ let ofBytes (input : byte array) : string = System.Text.Encoding.UTF8.GetString 
 let base64Encode (input : string) : string =
   input |> toBytes |> System.Convert.ToBase64String
 
+let base64UrlEncode (str : string) : string =
+  (base64Encode str).Replace('+', '-').Replace('/', '_').Replace("=", "")
+
 let base64Decode (encoded : string) : string =
   encoded |> System.Convert.FromBase64String |> ofBytes
 
-let sha1digest (input : string) : string =
+let sha1digest (input : string) : byte [] =
   use sha1 = new System.Security.Cryptography.SHA1CryptoServiceProvider()
-  input |> toBytes |> sha1.ComputeHash |> ofBytes
+  input |> toBytes |> sha1.ComputeHash
 
 let toString (v : 'a) : string = v.ToString()
+
+type System.DateTime with
+
+  member this.toIsoString() : string =
+    this.ToString("s", System.Globalization.CultureInfo.InvariantCulture) + "Z"
+
+  static member ofIsoString(str : string) : System.DateTime =
+    System.DateTime.Parse(str, System.Globalization.CultureInfo.InvariantCulture)
 
 // ----------------------
 // Random numbers
@@ -139,12 +154,11 @@ let gid () : uint64 =
   with e -> raise (InternalException $"gid failed: {e}")
 
 let randomString (length : int) : string =
-  let bytes = Array.create length (byte 0)
-  random.NextBytes(bytes)
-  // this can be longer than length because of base64
-  (System.Convert.ToBase64String bytes).Substring(0, 40)
+  let result =
+    Array.init length (fun _ -> char (random.Next(0x41, 0x5a))) |> System.String
 
-
+  assertEq "randomString length is correct" result.Length length
+  result
 
 // ----------------------
 // TODO move elsewhere
@@ -167,17 +181,6 @@ module String =
   let lengthInEgcs (s : string) : int =
     System.Globalization.StringInfo(s).LengthInTextElements
 
-  let base64UrlEncode (str : string) : string =
-
-    let inputBytes = System.Text.Encoding.UTF8.GetBytes(str)
-
-    // Special "url-safe" base64 encode.
-    System
-      .Convert
-      .ToBase64String(inputBytes)
-      .Replace('+', '-')
-      .Replace('/', '_')
-      .Replace("=", "")
 
 
 
@@ -191,9 +194,6 @@ type TaskOrValue<'T> =
   | Value of 'T
 
 module TaskOrValue =
-  // Wraps a value in TaskOrValue
-  let unit v = Value v
-
   let toTask (v : TaskOrValue<'a>) : Task<'a> =
     task {
       match v with
@@ -201,28 +201,41 @@ module TaskOrValue =
       | Value v -> return v
     }
 
-  // Create a new TaskOrValue that first runs 'vt' and then
-  // continues with whatever TaskorValue is produced by 'f'.
-  let bind f vt =
-    match vt with
-    | Value v ->
-        // It was a value, so we return 'f v' directly
-        f v
+  // Functions for a computation Expressions
+  let unit v = Value v
+
+  let tryWith (v : TaskOrValue<'a>) (f : exn -> TaskOrValue<'a>) : TaskOrValue<'a> =
+    match v with
+    | Value v -> Value v
     | Task t ->
-        // It was a task, so we need to unwrap that and create
-        // a new task - inside Task. If 'f v' returns a task, we
-        // still need to return this as task though.
         Task(
           task {
-            let! v = t
-
-            match f v with
-            | Value v -> return v
-            | Task t -> return! t
+            try
+              let! newt = t
+              return newt
+            with e -> return! toTask (f e)
           }
         )
 
+  let delay (f : unit -> TaskOrValue<'a>) : TaskOrValue<'a> =
+    Task(task { return! toTask (f ()) })
+
+  // Create a new TaskOrValue that first runs 'vt' and then
+  // continues with whatever TaskOrValue is produced by 'f'.
+  let bind (f : 'a -> TaskOrValue<'b>) (vt : TaskOrValue<'a>) : TaskOrValue<'b> =
+    match vt with
+    | Value v -> f v
+    | Task t ->
+        Task(
+          task {
+            let! v = t
+            return! toTask (f v)
+          }
+        )
+
+
 type TaskOrValueBuilder() =
+  // https://docs.microsoft.com/en-us/dotnet/fsharp/language-reference/computation-expressions
   // This lets us use let!, do! - These can be overloaded
   // so I define two overloads for 'let!' - one taking regular
   // Task and one our TaskOrValue. You can then call both using
@@ -234,6 +247,9 @@ type TaskOrValueBuilder() =
   // This lets us use return!
   member x.ReturnFrom(tv) = tv
   member x.Zero() = TaskOrValue.unit (())
+  // These lets us use try
+  member x.TryWith(tv, f) = TaskOrValue.tryWith tv f
+  member x.Delay(f) = TaskOrValue.delay f
 // To make this usable, this will need a few more
 // especially for reasonable exception handling..
 
@@ -326,12 +342,26 @@ let filter_s
   }
 
 // ----------------------
+// Lazy utilities
+// ----------------------
+module Lazy =
+  let inline force (l : Lazy<_>) = l.Force()
+  let map f l = lazy ((f << force) l)
+  let bind f l = lazy ((force << f << force) l)
+
+
+// ----------------------
+// Important types
+// ----------------------
+type tlid = uint64
+
+type id = uint64
+
+// ----------------------
 // Json auto-serialization
 // ----------------------
 module Json =
   module AutoSerialize =
-    open System
-    open System.Collections.Generic
     open System.Text.Json
     open System.Text.Json.Serialization
 
@@ -342,28 +372,60 @@ module Json =
       override this.Read
         (
           reader : byref<Utf8JsonReader>,
-          _typ : Type,
-          options : JsonSerializerOptions
+          _typ : System.Type,
+          _options : JsonSerializerOptions
         ) =
-        JsonSerializer.Deserialize<string>(&reader, options) |> parseBigint
+        reader.GetString() |> parseBigint
 
       override this.Write
         (
           writer : Utf8JsonWriter,
           value : bigint,
-          options : JsonSerializerOptions
+          _options : JsonSerializerOptions
         ) =
-        JsonSerializer.Serialize(writer, value.ToString(), options)
+        writer.WriteStringValue(value.ToString())
+
+    type TLIDConverter() =
+      inherit JsonConverter<tlid>()
+
+      override this.Read
+        (
+          reader : byref<Utf8JsonReader>,
+          _typ : System.Type,
+          _options : JsonSerializerOptions
+        ) =
+        if reader.TokenType = JsonTokenType.String then
+          let str = reader.GetString()
+          parseUInt64 str
+        else
+          reader.GetUInt64()
+
+      override this.Write
+        (
+          writer : Utf8JsonWriter,
+          value : tlid,
+          _options : JsonSerializerOptions
+        ) =
+        writer.WriteNumberValue(value)
 
 
     let _options =
       (let fsharpConverter =
-        JsonFSharpConverter(unionEncoding = JsonUnionEncoding.InternalTag)
+        JsonFSharpConverter(
+          unionEncoding =
+            (JsonUnionEncoding.InternalTag ||| JsonUnionEncoding.UnwrapOption)
+        )
 
        let options = JsonSerializerOptions()
-       options.Converters.Add(fsharpConverter)
+       options.Converters.Add(TLIDConverter())
        options.Converters.Add(BigIntConverter())
+       options.Converters.Add(fsharpConverter)
        options)
+
+    let registerConverter (c : JsonConverter<'a>) =
+      // insert in the front as the formatter will use the first converter that
+      // supports the type, not the best one
+      _options.Converters.Insert(0, c)
 
     let serialize (data : 'a) : string = JsonSerializer.Serialize(data, _options)
 
@@ -373,15 +435,23 @@ module Json =
 // ----------------------
 // Functions we'll later add to Tablecloth
 // ----------------------
-module TableCloth =
+module Tablecloth =
   module String =
-    let take (count : int) (str : string) : string = str.Substring(0, count)
+    let take (count : int) (str : string) : string =
+      if count >= str.Length then str else str.Substring(0, count)
 
     let removeSuffix (suffix : string) (str : string) : string =
       if str.EndsWith(suffix) then
         str.Substring(0, str.Length - suffix.Length)
       else
         str
+
+  module Map =
+    let fromListBy (f : 'v -> 'k) (l : List<'v>) : Map<'k, 'v> =
+      List.fold (fun (m : Map<'k, 'v>) v -> m.Add(f v, v)) Map.empty l
+
+    let merge (m1 : Map<'k, 'v>) (m2 : Map<'k, 'v>) : Map<'k, 'v> =
+      FSharpPlus.Map.union m1 m2
 
 // ----------------------
 // Task list processing
@@ -428,7 +498,6 @@ module Task =
 
       return (result |> Seq.toList)
     }
-
 
   let filterSequentially (f : 'a -> Task<bool>) (list : List<'a>) : Task<List<'a>> =
     task {
@@ -497,6 +566,30 @@ module Task =
           return List.head (lastcomp :: accum)
     }
 
+  // takes a list of tasks and calls f on it, turning it into a single task
+  let flatten (list : List<Task<'a>>) : Task<List<'a>> =
+    let rec loop (acc : Task<List<'a>>) (xs : List<Task<'a>>) =
+      task {
+        let! acc = acc
+
+        match xs with
+        | [] -> return List.rev acc
+        | x :: xs ->
+            let! x = x
+            return! loop (task { return (x :: acc) }) xs
+      }
+
+    loop (task { return [] }) list
+
+  let map (f : 'a -> 'b) (v : Task<'a>) : Task<'b> =
+    task {
+      let! v = v
+      return f v
+    }
+
+
+
+
 // ----------------------
 // Shared Types
 // ----------------------
@@ -515,8 +608,6 @@ type Sign =
   | Positive
   | Negative
 
-type tlid = uint64
-type id = uint64
 type CanvasID = System.Guid
 type UserID = System.Guid
 

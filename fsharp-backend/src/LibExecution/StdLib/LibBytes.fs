@@ -6,6 +6,8 @@ open System.Text
 
 let fn = FQFnName.stdlibName
 
+let incorrectArgs = LibExecution.Errors.incorrectArgs
+
 let fns : List<BuiltInFn> =
   [ { name = fn "Bytes" "base64Encode" 0
       parameters = [ Param.make "bytes" TBytes "" ]
@@ -18,7 +20,7 @@ let fns : List<BuiltInFn> =
             System.Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_')
             |> DStr
             |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -29,7 +31,6 @@ let fns : List<BuiltInFn> =
       description =
         "Hex (Base16) encodes `bytes` using an uppercase alphabet. Complies with RFC 4648 section 8."
       fn =
-
         (function
         | _, [ DBytes bytes ] ->
             let hexUppercaseLookup = "0123456789ABCDEF"
@@ -38,11 +39,14 @@ let fns : List<BuiltInFn> =
 
             for i = 0 to len - 1 do
               let byte = bytes.[i] |> int
-              buf.Append(hexUppercaseLookup.[((byte >>> 4) &&& 0xF)])
-              buf.Append(hexUppercaseLookup.[(byte &&& 0xF)])
+
+              buf
+                .Append(hexUppercaseLookup.[((byte >>> 4) &&& 0xF)])
+                .Append(hexUppercaseLookup.[(byte &&& 0xF)])
+              |> ignore
 
             buf.ToString() |> DStr |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated }
@@ -53,7 +57,7 @@ let fns : List<BuiltInFn> =
       fn =
         (function
         | _, [ DBytes bytes ] -> bytes |> Array.length |> Dval.int |> Value
-        | args -> incorrectArgs ())
+        | _ -> incorrectArgs ())
       sqlSpec = NotYetImplementedTODO
       previewable = Pure
       deprecated = NotDeprecated } ]
